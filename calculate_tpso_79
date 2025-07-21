@@ -114,11 +114,8 @@ def calculate_s21_te(freq_array):
         S21[i] = -2j * A_inv[-1, 0]
 
     return np.abs(S21)
-
+    
 def calculate_pcr(matrix, inputparameters):
-    """
-    Runs the CST simulation for a given pixel matrix to get the "actual" TE response.
-    """
     clear_com_cache()
     print("\nRunning CST simulation...")
 
@@ -127,16 +124,11 @@ def calculate_pcr(matrix, inputparameters):
     unitcellsize = float(inputparameters[2])
     substrateThickness = float(inputparameters[3])
     nPix = int(inputparameters[4])
-    
-    # Default return values in case of an error
+    substrate = inputparameters[6]
+
     te = np.array([0])
     freq = np.array([frequency])
     S = np.zeros((1, 4))
-    
-    # Check for matrix dimension mismatch
-    if matrix.shape[0] != nPix or matrix.shape[1] != nPix:
-        print(f"Error: Matrix dimensions ({matrix.shape}) do not match nPix ({nPix}).")
-        return te, freq, S
 
     x, y = np.meshgrid(np.linspace(0, unitcellsize, nPix + 1),
                        np.linspace(0, unitcellsize, nPix + 1))
@@ -146,7 +138,7 @@ def calculate_pcr(matrix, inputparameters):
     try:
         projectName = "filtermetasurface"
         myCST = cpa.CST_MicrowaveStudio(context.dataFolder, projectName + ".cst")
-        myCST.Solver.defineFloquetModes(nModes=2, theta=0.0, phi=0.0)
+        myCST.Solver.defineFloquetModes(nModes=2, theta=0.0, phi=0.0, forcePolar=False, polarAngle=0.0)
         myCST.Solver.setBoundaryCondition(
             xMin="unit cell", xMax="unit cell",
             yMin="unit cell", yMax="unit cell",
@@ -164,7 +156,7 @@ def calculate_pcr(matrix, inputparameters):
         Zblock = [substrateThickness, substrateThickness]
         for i1 in range(nPix):
             for j1 in range(nPix):
-                if matrix[i1, j1] > 0:  # Create geometry for 1 (metal) and 2 (metal with hole)
+                if matrix[i1, j1] > 0: # Create geometry for 1 (metal) and 2 (metal with Jerusalem cross)
                     ii += 1
                     Xblock = [x[i1, j1], x[i1, j1 + 1]]
                     Yblock = [y[i1 + 1, j1], y[i1, j1]]
@@ -177,48 +169,61 @@ def calculate_pcr(matrix, inputparameters):
                         name=name, component="component1", material="PEC"
                     )
 
-                    if matrix[i1, j1] == 2:  # If it's a metal patch with a hole
-                        hole_radius = (Xblock[1] - Xblock[0]) / 4
+                    if matrix[i1, j1] == 2: # Jerusalem cross slot
+                        # Calculate dimensions for Jerusalem cross
+                        pixel_width = Xblock[1] - Xblock[0]
                         center_x = (Xblock[0] + Xblock[1]) / 2
                         center_y = (Yblock[0] + Yblock[1]) / 2
-                        hole_name = f"Hole{ii}"
                         
-                        myCST.Build.Shape.addCylinder(
-                            orientation='z', xMin=center_x, yMin=center_y,
+                        # Create vertical slot
+                        vert_slot_name = f"VertSlot{ii}"
+                        myCST.Build.Shape.addBrick(
+                            xMin=center_x - pixel_width/8, xMax=center_x + pixel_width/8,
+                            yMin=Yblock[0], yMax=Yblock[1],
                             zMin=Zblock[0], zMax=Zblock[1] + 0.1,
-                            extRad=hole_radius, intRad=0.0, name=hole_name,
-                            component="component1", material="PEC"
+                            name=vert_slot_name, component="component1", material="PEC"
                         )
-                        myCST.Build.Boolean.subtract(f"component1:{name}", f"component1:{hole_name}")
+                        
+                        # Create horizontal slot
+                        horiz_slot_name = f"HorizSlot{ii}"
+                        myCST.Build.Shape.addBrick(
+                            xMin=Xblock[0], xMax=Xblock[1],
+                            yMin=center_y - pixel_width/8, yMax=center_y + pixel_width/8,
+                            zMin=Zblock[0], zMax=Zblock[1] + 0.1,
+                            name=horiz_slot_name, component="component1", material="PEC"
+                        )
+                        
+                        # Subtract both slots from the main patch
+                        myCST.Build.Boolean.subtract("component1:" + name, "component1:" + vert_slot_name)
+                        myCST.Build.Boolean.subtract("component1:" + name, "component1:" + horiz_slot_name)
 
-        save_path_dir = os.path.join(os.path.expanduser("~"), "Documents", "saved_cst_projects")
-        if not os.path.exists(save_path_dir):
-            os.makedirs(save_path_dir)
-        
-        save_file_name = "filtermetasurface_temp.cst"
+        # Save with unique name
+        save_path = r"C:/Users/IDARE_ECE/Documents/saved_cst_projects2/"
+        save_file_name = "filtermetasurface2.cst"
+        if not os.path.exists(save_path):
+            os.makedirs(save_path)
+
         myCST.Solver.setFrequencyRange(frequency - bandwidth / 2, frequency + bandwidth / 2)
         myCST.Solver.changeSolverType("HF Frequency Domain")
-        myCST.saveFile(save_path_dir, save_file_name)
+        myCST.saveFile(save_path, save_file_name)
         myCST.Solver.SetNumberOfResultDataSamples(501)
 
-        print("Running solver...")
+        print("Running solver")
         myCST.Solver.runSimulation()
         freq, SZMax1ZMax1 = myCST.Results.getSParameters(0, 0, 1, 1)
+        _, SZMax2ZMax1 = myCST.Results.getSParameters(0, 0, 2, 1)
         _, SZMin1ZMax1 = myCST.Results.getSParameters(-1, 0, 1, 1)
+        _, SZMin2ZMax1 = myCST.Results.getSParameters(-1, 0, 2, 1)
 
-        denominator = (np.abs(SZMin1ZMax1))**2 + (np.abs(SZMax1ZMax1))**2
-        # Avoid division by zero
-        te = np.divide((np.abs(SZMin1ZMax1))**2, denominator, out=np.zeros_like(denominator), where=denominator!=0)
-        
+        denominator = (abs(SZMin1ZMax1))**2 + (abs(SZMax1ZMax1))**2
+        te = ((abs(SZMin1ZMax1))**2) / denominator
+        S = np.column_stack((SZMax1ZMax1, SZMax2ZMax1, SZMin1ZMax1, SZMin2ZMax1))
+
         print("Simulation completed successfully")
         return te, freq, S
 
     except Exception as e:
         print(f"Error in CST simulation: {str(e)}")
-        # In case of error, return dummy data to allow script to continue if possible
-        freq = np.linspace(frequency - bandwidth / 2, frequency + bandwidth / 2, 501)
-        te = np.random.rand(501) * 0.1 # Small random noise for TE
-        print("Returning dummy data due to CST error.")
         return te, freq, S
     finally:
         if myCST is not None:
@@ -228,7 +233,6 @@ def calculate_pcr(matrix, inputparameters):
             except Exception as e:
                 print(f"Warning: Could not close CST file: {str(e)}")
         clear_com_cache()
-
 
 def parse_matrices(matrix_string):
     """Parses a raw string of numbers into a list of numpy arrays."""
@@ -265,32 +269,24 @@ if __name__ == "__main__":
     # --- Matrices Data ---
     # All matrices provided by the user are stored in this multi-line string.
     matrices_raw_string = """
-    0 0 0 2 2 0 0 0
-    0 0 0 1 1 0 0 0
-    0 0 1 2 2 1 0 0
-    2 1 2 2 2 2 1 2
-    2 1 2 2 2 2 1 2
-    0 0 1 2 2 1 0 0
-    0 0 0 1 1 0 0 0
-    0 0 0 2 2 0 0 0
+1 0 0 2 2 0 0 1
+0 2 0 2 2 0 2 0
+0 0 2 1 1 2 0 0
+2 2 1 1 1 1 2 2
+2 2 1 1 1 1 2 2
+0 0 2 1 1 2 0 0
+0 2 0 2 2 0 2 0
+1 0 0 2 2 0 0 1
 
-    0 0 0 2 2 0 0 0
-    0 0 0 1 1 0 0 0
-    0 0 1 1 1 1 0 0
-    2 1 1 2 2 1 1 2
-    2 1 1 2 2 1 1 2
-    0 0 1 1 1 1 0 0
-    0 0 0 1 1 0 0 0
-    0 0 0 2 2 0 0 0
+1 0 0 0 0 0 0 1
+0 2 0 2 2 0 2 0
+0 0 2 1 1 2 0 0
+0 2 1 2 2 1 2 0
+0 2 1 2 2 1 2 0
+0 0 2 1 1 2 0 0
+0 2 0 2 2 0 2 0
+1 0 0 0 0 0 0 1
 
-    0 0 0 2 2 0 0 0
-    0 0 0 1 1 0 0 0
-    0 0 1 2 2 1 0 0
-    2 1 2 2 2 2 1 2
-    2 1 2 2 2 2 1 2
-    0 0 1 2 2 1 0 0
-    0 0 0 1 1 0 0 0
-    0 0 0 2 2 0 0 0
     """
     
     # --- Main Processing Loop ---
