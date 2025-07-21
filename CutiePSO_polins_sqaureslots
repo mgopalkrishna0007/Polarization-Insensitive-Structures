@@ -63,8 +63,8 @@ class TPSOConfig:
     """Configuration class for PSO parameters"""
     def __init__(self):
         # PSO parameters
-        self.n_particles = 100
-        self.max_iterations = 20
+        self.n_particles = 10
+        self.max_iterations = 2
         self.w_initial = 1.1
         self.w_final = 0.1
         self.c1 = 2
@@ -345,10 +345,11 @@ def calculate_pcr(matrix, inputparameters):
 
 class PSO_Cost_Function:
     """Cost function class with context for particle storage."""
-    def __init__(self, inputparameters):
+    def __init__(self, inputparameters, config):  # Added config parameter
         self.inputparameters = inputparameters
         self.current_iteration = None
         self.particle_index = None
+        self.config = config  # Store the config
 
     def set_context(self, iteration, particle_index):
         """Set context for current particle evaluation."""
@@ -409,24 +410,112 @@ class PSO_Cost_Function:
             iteration_dir = os.path.join(results_dir, shape_name, f"iteration_{self.current_iteration}")
             os.makedirs(iteration_dir, exist_ok=True)
 
+            # Save this particle's data temporarily (will be cleaned up later)
+            temp_dir = os.path.join(iteration_dir, "temp")
+            os.makedirs(temp_dir, exist_ok=True)
+            save_solution(full_matrix, mse, self.inputparameters, f"particle_{self.particle_index}", temp_dir)
+            plot_solution(full_matrix, te, freq, mse, temp_dir, target_y)
+
             if mse <= mse_threshold:
-                save_dir = save_solution(full_matrix, mse, self.inputparameters, "threshold", iteration_dir)
-                plot_solution(full_matrix, te, freq, mse, save_dir, target_y)
-                results_storage['below_threshold'].append({'matrix': full_matrix, 'mse': mse, 'save_dir': save_dir})
+                results_storage['below_threshold'].append({'matrix': full_matrix, 'mse': mse})
             elif mse <= good_threshold:
-                save_dir = save_solution(full_matrix, mse, self.inputparameters, "good", iteration_dir)
-                plot_solution(full_matrix, te, freq, mse, save_dir, target_y)
-                results_storage['good_solutions'].append({'matrix': full_matrix, 'mse': mse, 'save_dir': save_dir})
-            else:
-                # Save all iterations data
-                save_dir = save_solution(full_matrix, mse, self.inputparameters, "iteration", iteration_dir)
-                plot_solution(full_matrix, te, freq, mse, save_dir, target_y)
-           
+                results_storage['good_solutions'].append({'matrix': full_matrix, 'mse': mse})
+
+            # After all particles in this iteration are evaluated, save top 5
+            if self.particle_index == self.config.n_particles - 1:
+                self._save_top5_for_iteration(iteration_dir, nPix, temp_dir)
+
             print(f"Current MSE: {mse:.12f}")
             return mse
         except Exception as e:
             print(f"Cost function error: {str(e)}")
             return np.inf
+
+    def _save_top5_for_iteration(self, iteration_dir, nPix, temp_dir):
+        """Saves only the top 5 best particles for the current iteration."""
+        # Get all particles from this iteration
+        current_iter_particles = [
+            p for p in all_particles_data 
+            if p['iteration'] == self.current_iteration and p['fitness'] != np.inf
+        ]
+        
+        # Sort by fitness (MSE)
+        sorted_particles = sorted(current_iter_particles, key=lambda x: x['fitness'])
+        
+        # Clean up the iteration directory (remove temp files)
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
+        
+        # Save the parameters file
+        with open(os.path.join(iteration_dir, "parameters.txt"), 'w') as f:
+            f.write(f"Iteration: {self.current_iteration}\n")
+            f.write(f"Number of particles: {self.config.n_particles}\n")
+            f.write(f"Grid size: {nPix}x{nPix}\n")
+            f.write(f"Best MSE this iteration: {sorted_particles[0]['fitness']:.12f}\n")
+            f.write("\nTop 5 Solutions:\n")
+            for i, p in enumerate(sorted_particles[:5]):
+                f.write(f"{i+1}. MSE: {p['fitness']:.12f}\n")
+        
+        # Save top 5 plots only
+        for i, particle in enumerate(sorted_particles[:5]):
+            rank = i + 1
+            
+            # Reconstruct matrix
+            if nPix % 2 == 1:
+                c = nPix // 2
+                base_pattern = np.zeros((nPix, nPix), dtype=int)
+                idx = 0
+                for i in range(c + 1):
+                    for j in range(i, c + 1):
+                        base_pattern[i, j] = particle['position_vector'][idx]
+                        idx += 1
+                full_matrix = mirror_8_fold_odd(base_pattern)
+            else:
+                half = nPix // 2
+                base_pattern = np.zeros((nPix, nPix), dtype=int)
+                idx = 0
+                for i in range(half):
+                    for j in range(i + 1):
+                        base_pattern[i, j] = particle['position_vector'][idx]
+                        idx += 1
+                full_matrix = mirror_8_fold_even(base_pattern)
+            
+            # Generate and save plot
+            target_y = None
+            if len(particle['freq_array']) > 1:
+                target_y, _ = calculate_s21_te(np.array(particle['freq_array']))
+            
+            plt.figure(figsize=(12, 5))
+            
+            # Pixel configuration plot
+            plt.subplot(121)
+            cmap = ListedColormap(['white', 'cornflowerblue', 'salmon', 'lightgreen'])
+            plt.imshow(full_matrix, cmap=cmap, interpolation='none', vmin=0, vmax=3)
+            plt.gca().set_xticks(np.arange(-0.5, full_matrix.shape[1], 1), minor=True)
+            plt.gca().set_yticks(np.arange(-0.5, full_matrix.shape[0], 1), minor=True)
+            plt.grid(which='minor', color='black', linestyle='-', linewidth=1)
+            plt.xticks([])
+            plt.yticks([])
+            plt.title(f"Pixel Configuration (Rank {rank})")
+            cbar = plt.colorbar(ticks=[0, 1, 2, 3])
+            cbar.set_ticklabels(['Empty', 'Full Patch', '0.25mm Slot', '0.5mm Slot'])
+            
+            # TE Response plot
+            plt.subplot(122)
+            if len(particle['freq_array']) > 1:
+                plt.plot(particle['freq_array'], particle['te_response'], 'b-', label='Optimized TE')
+                if target_y is not None:
+                    plt.plot(particle['freq_array'], target_y, 'r--', label='Target TE')
+            plt.xlabel('Frequency (GHz)')
+            plt.ylabel('Transmission Efficiency')
+            plt.title(f'TE Response (MSE: {particle["fitness"]:.4e})')
+            plt.legend()
+            plt.grid(True)
+            plt.ylim(0, 1.1)
+            
+            plt.tight_layout()
+            plt.savefig(os.path.join(iteration_dir, f"top_{rank}_solution.png"), dpi=300)
+            plt.close()
 
 def plot_solution(matrix, te, freq, mse, save_dir=None, target_y=None):
     """Plot and save solution visualization with 4 states."""
@@ -715,6 +804,7 @@ def pyoptimize_te(inputparameters):
     print("\nStarting 4-State PSO optimization...")
     nPix = inputparameters[4]
    
+    # Calculate number of variables based on grid size
     if nPix % 2 == 1:
         c = nPix // 2
         nvars = sum(range(c + 2))
@@ -722,30 +812,51 @@ def pyoptimize_te(inputparameters):
         half = nPix // 2
         nvars = sum(range(half + 1))
 
+    # Initialize configuration and cost function
     config = TPSOConfig()
-    pso_cost_fn = PSO_Cost_Function(inputparameters)
+    pso_cost_fn = PSO_Cost_Function(inputparameters, config)  # Pass config here
     start_time = time.time()
    
+    # Run optimization
     optimizer = ConfigurablePSO(fun=pso_cost_fn, nvars=nvars, config=config)
     results = optimizer.optimize()
    
-    save_all_particles_data(all_particles_data, inputparameters, config)
-   
+    # Create results directory structure
+    results_dir = r"C:\Users\User\Desktop\TPSO_Results"
+    shape_name = f"{nPix}x{nPix}_grid"
+    os.makedirs(os.path.join(results_dir, shape_name), exist_ok=True)
+    
+    # Save all particles data
+    all_particles_file = os.path.join(results_dir, shape_name, "all_particles_data.json")
+    with open(all_particles_file, 'w') as f:
+        # Convert numpy inf to string for JSON compatibility
+        for particle in all_particles_data:
+            if particle['fitness'] == np.inf:
+                particle['fitness'] = 'inf'
+        json.dump(all_particles_data, f, indent=4)
+    
+    print("\n" + "=" * 50)
+    print(f"Saved all particles data to: {os.path.abspath(all_particles_file)}")
+    print("=" * 50 + "\n")
+
     # Check if optimization produced a valid result
     if 'x' not in results or results['fun'] == np.inf:
         print("\nOptimization did not find a valid solution. Exiting.")
         return results_storage
 
+    # Process optimal solution
     optimal_vector = results['x']
     optimal_mse = results['fun']
    
+    # Reconstruct full matrix from optimal vector
     if nPix % 2 == 1:
         c = nPix // 2
         base = np.zeros((nPix, nPix), dtype=int)
         idx = 0
         for i in range(c + 1):
             for j in range(i, c + 1):
-                base[i, j] = optimal_vector[idx]; idx += 1
+                base[i, j] = optimal_vector[idx]
+                idx += 1
         optimal_matrix = mirror_8_fold_odd(base)
     else:
         half = nPix // 2
@@ -753,27 +864,34 @@ def pyoptimize_te(inputparameters):
         idx = 0
         for i in range(half):
             for j in range(i + 1):
-                base[i, j] = optimal_vector[idx]; idx += 1
+                base[i, j] = optimal_vector[idx]
+                idx += 1
         optimal_matrix = mirror_8_fold_even(base)
 
+    # Save final solution if valid
     if optimal_mse < np.inf:
         print("\n--- Final Best Solution ---")
-        # Create final solution directory
-        results_dir = r"C:\Users\User\Desktop\TPSO_Results"
-        nPix = inputparameters[4]
-        shape_name = f"{nPix}x{nPix}_grid"
         final_dir = os.path.join(results_dir, shape_name, "final_solution")
         os.makedirs(final_dir, exist_ok=True)
         
-        save_dir = save_solution(optimal_matrix, optimal_mse, inputparameters, "best_final", final_dir)
+        # Save solution files
+        save_solution(optimal_matrix, optimal_mse, inputparameters, "best_final", final_dir)
+        
+        # Calculate and plot final solution
         te_opt, freq_opt, S_opt = calculate_pcr(optimal_matrix, inputparameters)
         target_y, _ = calculate_s21_te(freq_opt)
-        plot_solution(optimal_matrix, te_opt, freq_opt, optimal_mse, save_dir, target_y)
+        plot_solution(optimal_matrix, te_opt, freq_opt, optimal_mse, final_dir, target_y)
+        
+        # Store results
         results_storage['best_solution'] = {
-            'matrix': optimal_matrix.tolist(), 'mse': optimal_mse,
-            'te': te_opt.tolist(), 'freq': freq_opt.tolist(), 'save_dir': save_dir
+            'matrix': optimal_matrix.tolist(), 
+            'mse': optimal_mse,
+            'te': te_opt.tolist(), 
+            'freq': freq_opt.tolist(), 
+            'save_dir': final_dir
         }
 
+    # Print optimization summary
     print("\nOptimization results:")
     print(f"Optimal MSE: {optimal_mse:.12f}")
     print(f"Exit condition: {results['message']}")
@@ -785,12 +903,11 @@ def pyoptimize_te(inputparameters):
     print(f"Good solutions found: {len(results_storage['good_solutions'])}")
 
     # Save final summary
-    results_dir = r"C:\Users\User\Desktop\TPSO_Results"
-    nPix = inputparameters[4]
-    shape_name = f"{nPix}x{nPix}_grid"
-    summary_path = os.path.join(results_dir, shape_name, "final_optimization_summary.json")
+    summary_path = os.path.join(results_dir, shape_name, "optimization_summary.json")
     with open(summary_path, 'w') as f:
         json.dump(results_storage, f, indent=4)
+    
+    print(f"\nSaved optimization summary to: {summary_path}")
        
     return results_storage
 
