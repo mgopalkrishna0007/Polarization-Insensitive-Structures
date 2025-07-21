@@ -63,8 +63,8 @@ class TPSOConfig:
     """Configuration class for PSO parameters"""
     def __init__(self):
         # PSO parameters
-        self.n_particles = 10
-        self.max_iterations = 2
+        self.n_particles = 100
+        self.max_iterations = 20
         self.w_initial = 1.1
         self.w_final = 0.1
         self.c1 = 2
@@ -249,7 +249,7 @@ def calculate_pcr(matrix, inputparameters):
             name="Substrate", component="component1", material="FR4 (Lossy)"
         )
 
-        metal_thickness = 0.035
+        metal_thickness = 0.0
         Zblock = [substrateThickness, substrateThickness + metal_thickness]
 
         positive_patches = []
@@ -405,7 +405,7 @@ class PSO_Cost_Function:
             all_particles_data.append(particle_data)
 
             # Create results directory path
-            results_dir = r"C:\Users\User\Desktop\TPSO_Results"
+            results_dir = r"E:\GOPAL_TPSO\TPSO_Results"
             shape_name = f"{nPix}x{nPix}_grid"
             iteration_dir = os.path.join(results_dir, shape_name, f"iteration_{self.current_iteration}")
             os.makedirs(iteration_dir, exist_ok=True)
