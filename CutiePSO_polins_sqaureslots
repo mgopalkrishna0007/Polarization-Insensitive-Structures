@@ -517,7 +517,7 @@ class PSO_Cost_Function:
             plt.savefig(os.path.join(iteration_dir, f"top_{rank}_solution.png"), dpi=300)
             plt.close()
 
-def plot_solution(matrix, te, freq, mse, save_dir=None, target_y=None):
+def plot_solution(self , matrix, te, freq, mse, save_dir=None, target_y=None):
     """Plot and save solution visualization with 4 states."""
     plt.figure(figsize=(15, 6))
 
@@ -566,7 +566,7 @@ def plot_solution(matrix, te, freq, mse, save_dir=None, target_y=None):
 
     if save_dir:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        plt.savefig(os.path.join(save_dir, f"solution_plot_{timestamp}.png"), dpi=300)
+        plt.savefig(os.path.join(save_dir, f"solution_plot_{self.particle_index}.png"), dpi=300)
     plt.close()
 
 def save_solution(matrix, mse, inputparameters, solution_type="best", base_dir=None):
