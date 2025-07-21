@@ -414,7 +414,7 @@ class PSO_Cost_Function:
             temp_dir = os.path.join(iteration_dir, "temp")
             os.makedirs(temp_dir, exist_ok=True)
             save_solution(full_matrix, mse, self.inputparameters, f"particle_{self.particle_index}", temp_dir)
-            plot_solution(full_matrix, te, freq, mse, temp_dir, target_y)
+            plot_solution(self ,full_matrix, te, freq, mse, temp_dir, target_y)
 
             if mse <= mse_threshold:
                 results_storage['below_threshold'].append({'matrix': full_matrix, 'mse': mse})
@@ -565,6 +565,7 @@ def plot_solution(self , matrix, te, freq, mse, save_dir=None, target_y=None):
     plt.tight_layout()
 
     if save_dir:
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         plt.savefig(os.path.join(save_dir, f"solution_plot_{self.particle_index}.png"), dpi=300)
     plt.close()
@@ -880,7 +881,7 @@ def pyoptimize_te(inputparameters):
         # Calculate and plot final solution
         te_opt, freq_opt, S_opt = calculate_pcr(optimal_matrix, inputparameters)
         target_y, _ = calculate_s21_te(freq_opt)
-        plot_solution(optimal_matrix, te_opt, freq_opt, optimal_mse, final_dir, target_y)
+        self ,optimal_matrix, te_opt, freq_opt, optimal_mse, final_dir, target_y = plot_solution()
         
         # Store results
         results_storage['best_solution'] = {
